@@ -27,15 +27,15 @@ cp .env.example .env
 bash scripts/run_agent.sh
 ```
 
-默认示例会打开 123Apps 视频编辑器，上传 `manual_files/sample.mp4`，完成剪辑、调速、加标题、调透明度、导出并下载视频。运行结束后，验收成果是：
+默认示例会打开 Clideo 视频编辑器，上传 `manual_files/sample.mp4`，完成调速、加标题、调透明度和导出确认。运行结束后，验收成果是：
 
 ```text
-outputs/demo_123apps/generated_script.py
+outputs/demo_clideo/generated_script.py
 ```
 
 这个脚本就是最终交付物：纯 DrissionPage，可独立重复运行，不依赖 LLM。
 
-导出下载的视频通常会出现在浏览器默认下载目录：
+如果任务包含下载动作，下载的视频通常会出现在浏览器默认下载目录：
 
 ```text
 ~/Downloads
@@ -245,7 +245,7 @@ Debug 分两层：
 cd new_drission
 source .venv/bin/activate
 
-bash scripts/run_123apps_demo.sh manual_files/sample.mp4
+bash scripts/run_clideo_demo.sh manual_files/sample.mp4
 ```
 
 这条命令会完成：
@@ -258,7 +258,7 @@ bash scripts/run_123apps_demo.sh manual_files/sample.mp4
 如果要换视频或输出目录：
 
 ```bash
-bash scripts/run_123apps_demo.sh /path/to/video.mp4 outputs/my_run
+bash scripts/run_clideo_demo.sh /path/to/video.mp4 outputs/my_run
 ```
 
 ### 验收成果：最终独立脚本
@@ -266,24 +266,24 @@ bash scripts/run_123apps_demo.sh /path/to/video.mp4 outputs/my_run
 运行完成后，最重要的交付物是：
 
 ```text
-outputs/demo_123apps/generated_script.py
+outputs/demo_clideo/generated_script.py
 ```
 
 这就是最终验收用的脚本：它是独立 DrissionPage 脚本，不依赖 LLM，也不依赖本 Agent 项目代码。
 
 其他辅助产物：
 
-- `outputs/demo_123apps/task_state.json`：滚动任务状态；
-- `outputs/demo_123apps/trace.json`：Generation 成功动作记录；
-- `outputs/demo_123apps/screenshots/`：执行过程截图；
-- `outputs/demo_123apps/replay_run/`：脚本生成阶段的回放辅助目录。
+- `outputs/demo_clideo/task_state.json`：滚动任务状态；
+- `outputs/demo_clideo/trace.json`：Generation 成功动作记录；
+- `outputs/demo_clideo/screenshots/`：执行过程截图；
+- `outputs/demo_clideo/replay_run/`：脚本生成阶段的回放辅助目录。
 
 ### 验证最终脚本
 
 ```bash
 python -m app.cli verify-script \
-  --script outputs/demo_123apps/generated_script.py \
-  --output-dir outputs/demo_123apps/script_verify \
+  --script outputs/demo_clideo/generated_script.py \
+  --output-dir outputs/demo_clideo/script_verify \
   --timeout-seconds 1200
 ```
 
@@ -294,29 +294,14 @@ Script success: True
 Exit code: 0
 ```
 
-### 录屏演示
-
-如果系统已安装 `ffmpeg`，可以用下面命令录制当前 Linux/WSL 图形桌面：
-
-```bash
-bash scripts/record_screen.sh outputs/demo_recording.mp4
-```
-
-停止录制时，在录屏命令所在终端按 `q`。如果提示没有安装 `ffmpeg`：
-
-```bash
-sudo apt-get update
-sudo apt-get install -y ffmpeg
-```
-
 ### 可选：从已有 trace 重新生成脚本
 
 如果已经有 `trace.json`，可以单独重新生成脚本：
 
 ```bash
 python -m app.cli generate-script \
-  --trace outputs/demo_123apps/trace.json \
-  --output outputs/demo_123apps/generated_script.py
+  --trace outputs/demo_clideo/trace.json \
+  --output outputs/demo_clideo/generated_script.py
 ```
 
 ### 可选：调试失败脚本

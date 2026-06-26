@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Defaults run the bundled 123Apps video-editing demo.
+# Defaults run the bundled Clideo video-editing demo.
 # Override TASK / ENTRY_URL / RESOURCE / OUTPUT_DIR in one shell line to run your own job.
-ENTRY_URL="${ENTRY_URL:-https://123apps.com/}"
+ENTRY_URL="${ENTRY_URL:-https://clideo.com/editor/}"
 RESOURCE="${RESOURCE:-manual_files/sample.mp4}"
-OUTPUT_DIR="${OUTPUT_DIR:-outputs/demo_123apps}"
-MAX_STEPS="${MAX_STEPS:-35}"
-TASK_TEMPLATE="${TASK_TEMPLATE:-examples/tasks/123apps_video_edit.txt}"
+OUTPUT_DIR="${OUTPUT_DIR:-outputs/demo_clideo}"
+MAX_STEPS="${MAX_STEPS:-28}"
+TASK_TEMPLATE="${TASK_TEMPLATE:-examples/tasks/clideo_video_edit.txt}"
 CLEAN_OUTPUT="${CLEAN_OUTPUT:-1}"
 
 if [[ -z "${TASK:-}" ]]; then
