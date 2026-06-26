@@ -27,13 +27,25 @@ cp .env.example .env
 bash scripts/run_agent.sh
 ```
 
-默认示例会打开 123Apps 视频编辑器，上传 `manual_files/sample.mp4`，完成剪辑、调速、加标题、调透明度和导出。运行结束后，验收成果是：
+默认示例会打开 123Apps 视频编辑器，上传 `manual_files/sample.mp4`，完成剪辑、调速、加标题、调透明度、导出并下载视频。运行结束后，验收成果是：
 
 ```text
 outputs/demo_123apps/generated_script.py
 ```
 
 这个脚本就是最终交付物：纯 DrissionPage，可独立重复运行，不依赖 LLM。
+
+导出下载的视频通常会出现在浏览器默认下载目录：
+
+```text
+~/Downloads
+```
+
+可以用下面的命令查看最近下载的视频：
+
+```bash
+bash scripts/show_downloads.sh
+```
 
 如果要跑自己的任务，直接在命令里替换网站、资源路径和动作描述：
 
@@ -280,6 +292,21 @@ python -m app.cli verify-script \
 ```text
 Script success: True
 Exit code: 0
+```
+
+### 录屏演示
+
+如果系统已安装 `ffmpeg`，可以用下面命令录制当前 Linux/WSL 图形桌面：
+
+```bash
+bash scripts/record_screen.sh outputs/demo_recording.mp4
+```
+
+停止录制时，在录屏命令所在终端按 `q`。如果提示没有安装 `ffmpeg`：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ffmpeg
 ```
 
 ### 可选：从已有 trace 重新生成脚本
