@@ -8,6 +8,7 @@ RESOURCE="${RESOURCE:-manual_files/sample.mp4}"
 OUTPUT_DIR="${OUTPUT_DIR:-outputs/demo_123apps}"
 MAX_STEPS="${MAX_STEPS:-35}"
 TASK_TEMPLATE="${TASK_TEMPLATE:-examples/tasks/123apps_video_edit.txt}"
+CLEAN_OUTPUT="${CLEAN_OUTPUT:-1}"
 
 if [[ -z "${TASK:-}" ]]; then
   if [[ ! -f "$TASK_TEMPLATE" ]]; then
@@ -39,6 +40,10 @@ if [[ -n "$RESOURCE" && ! -f "$RESOURCE" ]]; then
   echo "Resource file not found: $RESOURCE" >&2
   echo "Set RESOURCE=/path/to/file or put a demo video at manual_files/sample.mp4" >&2
   exit 1
+fi
+
+if [[ "$CLEAN_OUTPUT" == "1" ]]; then
+  rm -rf "$OUTPUT_DIR"
 fi
 
 python -m app.cli run-task \

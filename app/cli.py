@@ -148,6 +148,18 @@ def _run_task(args: argparse.Namespace) -> None:
         max_steps=args.max_steps,
     )
     result = loop.run()
+    if result.get("status") != "finished":
+        generated = output_dir / "generated_script.py"
+        if generated.exists():
+            generated.unlink()
+        print(f"Run result: {result}")
+        print(f"Task state: {task_state_path}")
+        print(f"Trace: {output_dir / 'trace.json'}")
+        print(
+            "Generation did not finish, so no final standalone script was generated. "
+            "See trace.json and screenshots for the failure context."
+        )
+        raise SystemExit(2)
     script_result = generate_script_from_trace(
         trace_path=output_dir / "trace.json",
         output_path=output_dir / "generated_script.py",

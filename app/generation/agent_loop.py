@@ -800,8 +800,9 @@ def _state_update_gate(
 
     Every step has already applied deterministic facts before this gate runs.
     The model updater is reserved for moments where global progress may need a
-    semantic rewrite: navigation, resource transitions, high-risk/finalizing
-    actions, large page changes, or periodic summary checkpoints.
+    semantic rewrite: resource transitions, high-risk/finalizing actions,
+    large page changes, or periodic summary checkpoints. Plain goto is kept
+    deterministic because the next observe already captures the new page.
     """
 
     if not has_model_client:
@@ -825,8 +826,8 @@ def _state_update_gate(
 
     if action.type == "goto":
         return {
-            "call_model": True,
-            "reason": "navigation_action_changes_page_context",
+            "call_model": False,
+            "reason": "navigation_observe_on_next_step_is_enough",
         }
 
     if _url_context_changed(before.url, after.url):

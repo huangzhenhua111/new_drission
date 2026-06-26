@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import os
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -72,23 +74,30 @@ class OpenAICompatibleClient:
         if response_format:
             payload["response_format"] = response_format
 
-        req = urllib.request.Request(
-            f"{self.config.base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.config.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise LLMError(f"LLM HTTP {exc.code}: {body}") from exc
-        except (urllib.error.URLError, TimeoutError, SocketTimeout, OSError) as exc:
-            raise LLMError(f"LLM request failed: {exc}") from exc
+        attempts = max(1, int(os.getenv("LLM_REQUEST_ATTEMPTS", "2")))
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            req = urllib.request.Request(
+                f"{self.config.base_url}/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {self.config.api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                raise LLMError(f"LLM HTTP {exc.code}: {body}") from exc
+            except (urllib.error.URLError, TimeoutError, SocketTimeout, OSError) as exc:
+                last_error = exc
+                if attempt >= attempts:
+                    break
+                time.sleep(min(2 * attempt, 6))
+        raise LLMError(f"LLM request failed after {attempts} attempts: {last_error}") from last_error
 
 
 def _image_data_url(path: Path) -> str:

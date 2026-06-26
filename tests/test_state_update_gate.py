@@ -81,6 +81,24 @@ def test_state_update_gate_calls_periodic_checkpoint() -> None:
     assert gate["reason"] == "periodic_state_summary_checkpoint"
 
 
+def test_state_update_gate_skips_plain_goto() -> None:
+    action = ActionCall(type="goto", reason="open site", url="https://example.com")
+
+    gate = _state_update_gate(
+        step_number=1,
+        steps_since_model_state_update=0,
+        has_model_client=True,
+        decision=_decision(action, risk="high"),
+        action=action,
+        before=PageObservation(url="chrome://newtab/"),
+        after=PageObservation(url="https://example.com"),
+        result={"status": "navigated"},
+    )
+
+    assert gate["call_model"] is False
+    assert gate["reason"] == "navigation_observe_on_next_step_is_enough"
+
+
 def test_state_update_gate_skips_when_no_model_client() -> None:
     action = ActionCall(type="click", reason="click Export button")
 

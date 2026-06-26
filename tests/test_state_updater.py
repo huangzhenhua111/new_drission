@@ -38,3 +38,32 @@ def test_state_updater_marks_uploaded_resource_and_advances_next_step() -> None:
     upload_items = [item for item in state.goal["work_items"] if "上传" in item["title"]]
     assert upload_items[0]["status"] == "done"
     assert state.rolling_context["next_step"]["work_item_id"] != upload_items[0]["id"]
+
+
+def test_goto_does_not_mark_complex_work_item_done() -> None:
+    state = TaskParser(None).parse(
+        request="打开 123Apps Video Editor，上传 /tmp/sample.mp4，剪掉开头 2 秒，调速 1.5，添加标题并下载",
+        entry_url="https://123apps.com/",
+        resources=["/tmp/sample.mp4"],
+    )
+    updater = TaskStateUpdater(None)
+    before = PageObservation(url="chrome://newtab/", title="new tab")
+    after = PageObservation(url="https://123apps.com/", title="123Apps", text_excerpt="Video Editor")
+    action = ActionCall(
+        type="goto",
+        reason="open site",
+        url="https://123apps.com/",
+        expected_result="home page loads",
+    )
+
+    updater.update_after_step(
+        task_state=state,
+        step_id="s1",
+        before=before,
+        after=after,
+        action=action,
+        result={"status": "navigated"},
+    )
+
+    assert all(item.get("status") != "done" for item in state.goal["work_items"])
+    assert state.rolling_context["next_step"]["work_item_id"] == state.goal["work_items"][0]["id"]
