@@ -1,0 +1,24 @@
+[project]
+name = "new-drission"
+version = "0.1.0"
+description = "Multimodal rolling web automation agent"
+requires-python = ">=3.11"
+dependencies = [
+  "python-dotenv>=1.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+browser = [
+  "DrissionPage>=4.1.1.4",
+]
+
+[project.scripts]
+new-drission = "app.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
