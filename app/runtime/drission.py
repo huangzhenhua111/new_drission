@@ -141,13 +141,20 @@ class DrissionRuntime:
                 ele.focus()
             if _is_contenteditable(ele):
                 page = self._require_page()
-                if hasattr(page, "_run_cdp"):
-                    _dispatch_key_chord(page, "CTRL", "A")
-                    page._run_cdp("Input.insertText", text=value)
-                else:
+                if not _replace_contenteditable_text(ele, value):
+                    if hasattr(page, "_run_cdp"):
+                        _replace_focused_text_with_cdp(page, value)
+                    else:
+                        ele.input(value, clear=True)
+            elif _is_text_form_control(ele):
+                if not _replace_form_control_text(ele, value):
                     ele.input(value, clear=True)
             else:
-                ele.input(value, clear=True)
+                page = self._require_page()
+                if hasattr(page, "_run_cdp"):
+                    _replace_focused_text_with_cdp(page, value)
+                else:
+                    ele.input(value, clear=True)
             ele.run_js(
                 """
                 this.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: String(arguments[0])}));
@@ -159,8 +166,7 @@ class DrissionRuntime:
         except Exception:
             page = self._require_page()
             if hasattr(page, "_run_cdp"):
-                _dispatch_key_chord(page, "CTRL", "A")
-                page._run_cdp("Input.insertText", text=value)
+                _replace_focused_text_with_cdp(page, value)
             else:
                 raise
         self._require_page().wait(0.5)
@@ -205,8 +211,24 @@ class DrissionRuntime:
         if "+" in normalized and hasattr(page, "_run_cdp"):
             modifier, key = normalized.replace("CONTROL+", "CTRL+").split("+", 1)
             _dispatch_key_chord(page, modifier, key)
+        elif normalized in {"ESC", "ESCAPE"} and hasattr(page, "_run_cdp"):
+            page._run_cdp(
+                "Input.dispatchKeyEvent",
+                type="keyDown",
+                key="Escape",
+                code="Escape",
+                windowsVirtualKeyCode=27,
+            )
+            page._run_cdp(
+                "Input.dispatchKeyEvent",
+                type="keyUp",
+                key="Escape",
+                code="Escape",
+                windowsVirtualKeyCode=27,
+            )
         else:
             page.actions.key_down(normalized).key_up(normalized)
+        page.wait(0.5)
         return {"status": "hotkey", "value": value}
 
     def _find_element(self, action: ActionCall, *, require_displayed: bool = True) -> tuple[Any, str]:
@@ -422,6 +444,119 @@ def _is_contenteditable(ele: Any) -> bool:
         return str(ele.attr("contenteditable") or "").lower() == "true"
     except Exception:
         return False
+
+
+def _replace_contenteditable_text(ele: Any, value: str) -> bool:
+    try:
+        return bool(
+            ele.run_js(
+                """
+                this.focus();
+                const value = String(arguments[0]);
+                const selection = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(this);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                let ok = false;
+                try {
+                  ok = document.execCommand('insertText', false, value);
+                } catch (e) {
+                  ok = false;
+                }
+                if (!ok) {
+                  this.textContent = value;
+                }
+                this.dispatchEvent(new InputEvent('input', {
+                  bubbles: true,
+                  inputType: 'insertText',
+                  data: value
+                }));
+                this.dispatchEvent(new Event('change', {bubbles: true}));
+                return true;
+                """,
+                value,
+            )
+        )
+    except Exception:
+        return False
+
+
+def _replace_form_control_text(ele: Any, value: str) -> bool:
+    try:
+        return bool(
+            ele.run_js(
+                """
+                this.focus();
+                const value = String(arguments[0]);
+                const proto = this instanceof HTMLTextAreaElement
+                  ? HTMLTextAreaElement.prototype
+                  : HTMLInputElement.prototype;
+                const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+                if (descriptor && descriptor.set) {
+                  descriptor.set.call(this, '');
+                  this.dispatchEvent(new InputEvent('input', {
+                    bubbles: true,
+                    inputType: 'deleteContentBackward',
+                    data: null
+                  }));
+                  descriptor.set.call(this, value);
+                } else {
+                  this.value = value;
+                }
+                this.dispatchEvent(new InputEvent('input', {
+                  bubbles: true,
+                  inputType: 'insertText',
+                  data: value
+                }));
+                this.dispatchEvent(new Event('change', {bubbles: true}));
+                this.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'Enter'}));
+                return this.value === value;
+                """,
+                value,
+            )
+        )
+    except Exception:
+        return False
+
+
+def _is_text_form_control(ele: Any) -> bool:
+    try:
+        tag = str(ele.tag or "").lower()
+    except Exception:
+        tag = ""
+    if tag == "textarea":
+        return True
+    if tag != "input":
+        return False
+    try:
+        input_type = str(ele.attr("type") or "text").lower()
+    except Exception:
+        input_type = "text"
+    return input_type not in {
+        "button",
+        "submit",
+        "reset",
+        "checkbox",
+        "radio",
+        "file",
+        "image",
+        "range",
+        "color",
+    }
+
+
+def _replace_focused_text_with_cdp(page: Any, value: str) -> None:
+    # Non-standard canvas/SVG editors often enter an internal text-edit mode
+    # after double click. In that mode Input.insertText may append at the caret
+    # unless the current text is explicitly selected and deleted first.
+    _dispatch_key_chord(page, "CTRL", "A")
+    try:
+        page._run_cdp("Input.dispatchKeyEvent", type="keyDown", key="Backspace", code="Backspace", windowsVirtualKeyCode=8)
+        page._run_cdp("Input.dispatchKeyEvent", type="keyUp", key="Backspace", code="Backspace", windowsVirtualKeyCode=8)
+    except Exception:
+        pass
+    page._run_cdp("Input.insertText", text=value)
 
 
 def _normalize_selector(selector: str) -> str:

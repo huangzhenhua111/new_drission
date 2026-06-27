@@ -73,7 +73,7 @@ def _split_request_into_work_items(request: str) -> list[dict]:
     text = " ".join(str(request or "").split())
     if not text:
         return []
-    parts = re.split(r"(?:；|;|，然后|然后|再|最后|并且|以及)", text)
+    parts = re.split(r"(?:；|;|，然后|然后|，最后|最后|，再|再|并且|以及|，|,)", text)
     items: list[dict] = []
     for index, part in enumerate(parts, start=1):
         item = part.strip(" ，,。.;；")

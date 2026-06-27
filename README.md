@@ -18,7 +18,15 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# 编辑 .env，填入 MULTIMODAL_API_KEY
+# 编辑 .env，填入你自己的多模态模型 API Key
+```
+
+这个项目的 Generation 阶段需要调用多模态模型同时理解 DOM 和截图；仓库不会内置任何 API Key。默认演示配置使用 OpenAI-compatible 接口的 `qwen3.7-plus`：
+
+```env
+MULTIMODAL_MODEL=qwen3.7-plus
+MULTIMODAL_API_KEY=你的_key
+MULTIMODAL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
 
 一行命令跑默认示例：
@@ -27,7 +35,12 @@ cp .env.example .env
 bash scripts/run_agent.sh
 ```
 
-默认示例会打开 Clideo 视频编辑器，上传 `manual_files/sample.mp4`，完成调速、加标题、调透明度和导出确认。运行结束后，验收成果是：
+跑生成的脚本：
+```bash
+python -m app.cli verify-script --script outputs/demo_clideo/generated_script.py --output-dir outputs/demo_clideo/script_verify
+```
+
+默认示例会打开 Clideo 视频编辑器，上传 `manual_files/sample.mp4`，完成调速、加标题、调透明度、导出确认，并等待导出完成后点击 Download 下载到本地。运行结束后，验收成果是：
 
 ```text
 outputs/demo_clideo/generated_script.py
@@ -41,10 +54,16 @@ outputs/demo_clideo/generated_script.py
 ~/Downloads
 ```
 
-可以用下面的命令查看最近下载的视频：
+可以用下面的命令查看最近下载的视频，并默认打开最新的 mp4：
 
 ```bash
 bash scripts/show_downloads.sh
+```
+
+如果只想列出文件、不自动打开：
+
+```bash
+OPEN_LATEST=0 bash scripts/show_downloads.sh
 ```
 
 如果要跑自己的任务，直接在命令里替换网站、资源路径和动作描述：
@@ -95,16 +114,16 @@ StateUpdater 更新 task_state
 - Python 3.11+
 - Google Chrome / Chromium
 - DrissionPage 4.1.1.4+
-- 一个 OpenAI-compatible 的多模态模型接口
+- 一个 OpenAI-compatible 的多模态模型接口，需要自己在 `.env` 里配置 API Key
 
-当前默认模型：
+当前默认演示模型：
 
 ```env
 MULTIMODAL_MODEL=qwen3.7-plus
 MULTIMODAL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
 
-项目会优先读取项目根目录下的 `.env`。
+项目会优先读取项目根目录下的 `.env`。其中 `MULTIMODAL_*` 是必需配置；`TEXT_*` 是可选配置，不配置时会复用多模态模型。
 
 ## 3. 安装
 
@@ -126,10 +145,10 @@ MULTIMODAL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 BROWSER_HEADLESS=false
 BROWSER_USER_DATA_DIR=.browser_profile
 
-# 可选。文本模型不配置时默认复用多模态模型。
-TEXT_MODEL=qwen3.7-plus
-TEXT_API_KEY=你的_key
-TEXT_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# 可选。文本模型不配置时默认复用多模态模型；也可以单独配置 DeepSeek 等文本模型。
+TEXT_MODEL=
+TEXT_API_KEY=
+TEXT_BASE_URL=
 ```
 
 如果 Chrome UI 太大，可以用系统缩放或 Chrome 自身缩放调整；自动化脚本本身不依赖固定屏幕分辨率。

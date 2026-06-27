@@ -197,7 +197,12 @@ def execute_action(page, action: dict) -> dict:
         page.wait(1)
         return {"status": "navigated", "url": url}
     if action_type == "click":
+        if action_looks_like(action, ["download", "下载"]):
+            selector = click_download_when_ready(page, action)
+            return {"status": "clicked", "selector": selector}
         selector = click(page, action)
+        if action_looks_like(action, ["continue", "开始导出", "export settings"]):
+            wait_after_export_continue(page)
         return {"status": "clicked", "selector": selector}
     if action_type == "double_click":
         selector = click(page, action)
@@ -242,6 +247,91 @@ def click(page, action: dict) -> str:
     return selector
 
 
+def click_download_when_ready(page, action: dict) -> str:
+    """Wait for an export to finish, then click the Download button.
+
+    Some editors do not enter the export-progress state even though the
+    recorded Continue click returned successfully. Treat that as a recoverable
+    replay condition: if the export settings dialog is still open, click
+    Continue again; then wait through exporting/processing until Download is
+    visible.
+    """
+    timeout = float(os.getenv("REPLAY_DOWNLOAD_READY_TIMEOUT", "420"))
+    started = __import__("time").perf_counter()
+    selectors = selectors_for(action) or ["text=Download", "text=下载"]
+    last_error = None
+    while __import__("time").perf_counter() - started < timeout:
+        if export_settings_modal_visible(page):
+            click_export_continue_fallback(page)
+            page.wait(2)
+            continue
+        try:
+            ele, selector = find_element(page, selectors, timeout=2)
+            try:
+                ele.click()
+            except Exception:
+                ele.click(by_js=True)
+            page.wait(2)
+            return selector
+        except Exception as exc:
+            last_error = exc
+        text = page_text(page).lower()
+        if any(marker in text for marker in ["exporting", "processing", "rendering", "encoding", "uploading", "导出中", "处理中"]):
+            page.wait(3)
+        else:
+            page.wait(2)
+    raise RuntimeError(f"Download button did not become available before timeout; last error: {last_error}")
+
+
+def wait_after_export_continue(page) -> None:
+    timeout = float(os.getenv("REPLAY_EXPORT_START_TIMEOUT", "45"))
+    started = __import__("time").perf_counter()
+    while __import__("time").perf_counter() - started < timeout:
+        text = page_text(page).lower()
+        if any(marker in text for marker in ["exporting", "processing", "rendering", "encoding", "download", "导出中", "处理中", "下载"]):
+            return
+        if not export_settings_modal_visible(page):
+            return
+        click_export_continue_fallback(page)
+        page.wait(2)
+
+
+def export_settings_modal_visible(page) -> bool:
+    text = page_text(page).lower()
+    return "export settings" in text and "continue" in text
+
+
+def click_export_continue_fallback(page) -> bool:
+    selectors = [
+        "text=Continue",
+        "text=继续",
+        'css:button.app-button.app-button--variant-export-settings',
+        'css:[class*="export-settings" i] button',
+        'css:[class*="modal" i] button',
+    ]
+    for selector in selectors:
+        try:
+            ele, _ = find_element(page, [selector], timeout=1)
+            try:
+                ele.click()
+            except Exception:
+                ele.click(by_js=True)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def action_looks_like(action: dict, keywords: list[str]) -> bool:
+    text = " ".join(
+        str(action.get(key) or "")
+        for key in ["reason", "expected_result", "selector", "value"]
+    )
+    text += " " + " ".join(str(value or "") for value in action.get("selectors") or [])
+    lowered = text.lower()
+    return any(str(keyword).lower() in lowered for keyword in keywords)
+
+
 def input_text(page, action: dict) -> str:
     ele, selector = find_element(page, selectors_for(action))
     value = action.get("value") or ""
@@ -249,13 +339,19 @@ def input_text(page, action: dict) -> str:
         if hasattr(ele, "focus"):
             ele.focus()
         if is_contenteditable(ele):
-            if hasattr(page, "_run_cdp"):
-                dispatch_key_chord(page, "CTRL+A")
-                page._run_cdp("Input.insertText", text=value)
-            else:
+            if not replace_contenteditable_text(ele, value):
+                if hasattr(page, "_run_cdp"):
+                    replace_focused_text_with_cdp(page, value)
+                else:
+                    ele.input(value, clear=True)
+        elif is_text_form_control(ele):
+            if not replace_form_control_text(ele, value):
                 ele.input(value, clear=True)
         else:
-            ele.input(value, clear=True)
+            if hasattr(page, "_run_cdp"):
+                replace_focused_text_with_cdp(page, value)
+            else:
+                ele.input(value, clear=True)
         ele.run_js(
             """
             this.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: String(arguments[0])}));
@@ -266,8 +362,7 @@ def input_text(page, action: dict) -> str:
         )
     except Exception:
         if hasattr(page, "_run_cdp"):
-            dispatch_key_chord(page, "CTRL+A")
-            page._run_cdp("Input.insertText", text=value)
+            replace_focused_text_with_cdp(page, value)
         else:
             raise
     page.wait(0.5)
@@ -674,6 +769,116 @@ def is_contenteditable(ele) -> bool:
         return str(ele.attr("contenteditable") or "").lower() == "true"
     except Exception:
         return False
+
+
+def replace_contenteditable_text(ele, value: str) -> bool:
+    try:
+        return bool(
+            ele.run_js(
+                """
+                this.focus();
+                const value = String(arguments[0]);
+                const selection = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(this);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                let ok = false;
+                try {
+                  ok = document.execCommand('insertText', false, value);
+                } catch (e) {
+                  ok = false;
+                }
+                if (!ok) {
+                  this.textContent = value;
+                }
+                this.dispatchEvent(new InputEvent('input', {
+                  bubbles: true,
+                  inputType: 'insertText',
+                  data: value
+                }));
+                this.dispatchEvent(new Event('change', {bubbles: true}));
+                return true;
+                """,
+                value,
+            )
+        )
+    except Exception:
+        return False
+
+
+def replace_form_control_text(ele, value: str) -> bool:
+    try:
+        return bool(
+            ele.run_js(
+                """
+                this.focus();
+                const value = String(arguments[0]);
+                const proto = this instanceof HTMLTextAreaElement
+                  ? HTMLTextAreaElement.prototype
+                  : HTMLInputElement.prototype;
+                const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+                if (descriptor && descriptor.set) {
+                  descriptor.set.call(this, '');
+                  this.dispatchEvent(new InputEvent('input', {
+                    bubbles: true,
+                    inputType: 'deleteContentBackward',
+                    data: null
+                  }));
+                  descriptor.set.call(this, value);
+                } else {
+                  this.value = value;
+                }
+                this.dispatchEvent(new InputEvent('input', {
+                  bubbles: true,
+                  inputType: 'insertText',
+                  data: value
+                }));
+                this.dispatchEvent(new Event('change', {bubbles: true}));
+                this.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'Enter'}));
+                return this.value === value;
+                """,
+                value,
+            )
+        )
+    except Exception:
+        return False
+
+
+def is_text_form_control(ele) -> bool:
+    try:
+        tag = str(ele.tag or "").lower()
+    except Exception:
+        tag = ""
+    if tag == "textarea":
+        return True
+    if tag != "input":
+        return False
+    try:
+        input_type = str(ele.attr("type") or "text").lower()
+    except Exception:
+        input_type = "text"
+    return input_type not in {
+        "button",
+        "submit",
+        "reset",
+        "checkbox",
+        "radio",
+        "file",
+        "image",
+        "range",
+        "color",
+    }
+
+
+def replace_focused_text_with_cdp(page, value: str) -> None:
+    dispatch_key_chord(page, "CTRL+A")
+    try:
+        page._run_cdp("Input.dispatchKeyEvent", type="keyDown", key="Backspace", code="Backspace", windowsVirtualKeyCode=8)
+        page._run_cdp("Input.dispatchKeyEvent", type="keyUp", key="Backspace", code="Backspace", windowsVirtualKeyCode=8)
+    except Exception:
+        pass
+    page._run_cdp("Input.insertText", text=value)
 
 
 def dispatch_mouse_double_click(ele) -> None:

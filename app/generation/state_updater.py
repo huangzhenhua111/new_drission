@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict
 from pathlib import Path
 from time import perf_counter
@@ -62,6 +63,7 @@ class TaskStateUpdater:
             result=result,
         )
         self._ensure_work_items(task_state)
+        self._downgrade_unsubstantiated_done_items(task_state)
         self._update_next_step_fallback(task_state)
         self._normalize_work_item_progress(task_state)
         return {"status": "model_updated", "elapsed_seconds": round(perf_counter() - started, 3)}
@@ -85,6 +87,7 @@ class TaskStateUpdater:
             result=result,
         )
         self._ensure_work_items(task_state)
+        self._downgrade_unsubstantiated_done_items(task_state)
         self._normalize_work_item_progress(task_state)
         self._update_next_step_fallback(task_state)
 
@@ -188,6 +191,11 @@ class TaskStateUpdater:
                 task_state.rolling_context.setdefault("navigation_evidence", []),
                 f"{step_id}: Navigated to {after.url}",
             )
+            _mark_navigation_work_item_done(
+                task_state,
+                step_id,
+                f"Navigated to {after.url}",
+            )
         if action.type == "upload" and status == "uploaded":
             uploaded_path = str((result.get("runtime_result") or {}).get("path") or action.path or "")
             for resource in task_state.resources:
@@ -207,11 +215,18 @@ class TaskStateUpdater:
                 f"Runtime upload succeeded for {action.path}",
             )
         if action.type in {"click", "double_click", "input", "hotkey"} and status in {"clicked", "input", "hotkey"}:
-            _mark_open_work_item_in_progress(
+            if not _mark_satisfied_work_item(
                 task_state,
+                action,
+                after,
                 step_id,
                 f"{action.type} executed: {action.expected_result or action.reason}",
-            )
+            ):
+                _mark_open_work_item_in_progress(
+                    task_state,
+                    step_id,
+                    f"{action.type} executed: {action.expected_result or action.reason}",
+                )
         if action.type == "finish" or status == "finished":
             for item in _work_items(task_state):
                 if item.get("status") != "done":
@@ -468,6 +483,20 @@ class TaskStateUpdater:
             if seen_active and status == "in_progress":
                 item["status"] = "pending"
 
+    def _downgrade_unsubstantiated_done_items(self, task_state: TaskState) -> None:
+        for item in _work_items(task_state):
+            if item.get("status") != "done":
+                continue
+            missing = _missing_required_evidence(item)
+            if not missing:
+                continue
+            item["status"] = "in_progress"
+            _append_unique(
+                item.setdefault("evidence", []),
+                "Guard: downgraded from done because evidence is missing for "
+                + ", ".join(missing),
+            )
+
     def _fallback_recalibrate_after_refresh(
         self,
         *,
@@ -676,7 +705,49 @@ def _mark_matching_work_item(
     _mark_open_work_item_in_progress(task_state, step_id, evidence)
 
 
+def _mark_navigation_work_item_done(
+    task_state: TaskState,
+    step_id: str,
+    evidence: str,
+) -> None:
+    navigation_markers = ["打开", "进入", "访问", "open", "go to", "navigate"]
+    non_navigation_markers = [
+        "上传",
+        "导入",
+        "剪",
+        "调",
+        "速度",
+        "添加",
+        "标题",
+        "文字",
+        "透明",
+        "导出",
+        "下载",
+        "upload",
+        "speed",
+        "text",
+        "opacity",
+        "export",
+        "download",
+    ]
+    for item in _work_items(task_state):
+        if item.get("status") == "done":
+            continue
+        title = str(item.get("title") or "").lower()
+        if not any(marker in title for marker in navigation_markers):
+            continue
+        if any(marker in title for marker in non_navigation_markers):
+            continue
+        item["status"] = "done"
+        _append_unique(item.setdefault("evidence", []), f"{step_id}: {evidence}")
+        return
+
+
 def _mark_open_work_item_in_progress(task_state: TaskState, step_id: str, evidence: str) -> None:
+    for item in _work_items(task_state):
+        if item.get("status") == "in_progress":
+            _append_unique(item.setdefault("evidence", []), f"{step_id}: {evidence}")
+            return
     for item in _work_items(task_state):
         if item.get("status") == "pending":
             item["status"] = "in_progress"
@@ -684,9 +755,184 @@ def _mark_open_work_item_in_progress(task_state: TaskState, step_id: str, eviden
             return
 
 
+def _mark_satisfied_work_item(
+    task_state: TaskState,
+    action: ActionCall,
+    after: PageObservation,
+    step_id: str,
+    evidence: str,
+) -> bool:
+    for item in _work_items(task_state):
+        if item.get("status") == "done":
+            continue
+        if not _action_satisfies_work_item(action, item, after):
+            continue
+        item["status"] = "done"
+        _append_unique(item.setdefault("evidence", []), f"{step_id}: {evidence}")
+        return True
+    return False
+
+
+def _action_satisfies_work_item(
+    action: ActionCall,
+    item: dict[str, Any],
+    after: PageObservation | None = None,
+) -> bool:
+    title = str(item.get("title") or "").lower()
+    action_text = " ".join(
+        str(value or "")
+        for value in [
+            action.type,
+            action.reason,
+            action.expected_result,
+            action.value,
+            action.selector,
+            action.target_candidate_id,
+        ]
+    ).lower()
+    preparatory_markers = [
+        "准备",
+        "以便",
+        "访问",
+        "open",
+        "opens",
+        "panel",
+        "controls",
+        "面板",
+        "控件",
+        "选项卡",
+        "切换",
+        "tab",
+    ]
+    completion_markers = [
+        "设置为",
+        "调整为",
+        "被设置",
+        "选中",
+        "selected",
+        "set to",
+        "input",
+        "输入",
+        "changes to",
+        "changed to",
+    ]
+
+    if any(marker in title for marker in ["速度", "倍速", "speed", "1.5"]):
+        if "1.5" not in action_text:
+            return False
+        if any(marker in action_text for marker in preparatory_markers) and not any(
+            marker in action_text for marker in completion_markers
+        ):
+            return False
+        return True
+
+    if any(marker in title for marker in ["透明", "不透明", "opacity"]):
+        if not any(marker in action_text for marker in ["opacity", "透明", "不透明", "50", "%"]):
+            return False
+        if any(marker in action_text for marker in preparatory_markers) and not any(
+            marker in action_text for marker in completion_markers + ["50", "50%"]
+        ):
+            return False
+        return True
+
+    if any(marker in title for marker in ["字体颜色", "文字颜色", "颜色", "color", "红色", "red"]):
+        if not any(
+            marker in action_text
+            for marker in ["颜色", "color", "fill", "红", "red", "#f00", "#ff0000", "rgb(255"]
+        ):
+            return False
+        if any(marker in action_text for marker in preparatory_markers) and not any(
+            marker in action_text for marker in completion_markers + ["红", "red", "#f00", "#ff0000"]
+        ):
+            return False
+        return True
+
+    if any(marker in title for marker in ["标题", "文字", "text", "title", "短视频测试"]):
+        quoted_targets = _quoted_texts(str(item.get("title") or ""))
+        if quoted_targets:
+            if _visible_text_shows_appended_placeholder(after, quoted_targets):
+                return False
+            return action.type == "input" and any(
+                target.lower() in str(action.value or "").lower() for target in quoted_targets
+            )
+        return action.type == "input" and bool(action.value)
+
+    if any(marker in title for marker in ["导出", "export", "continue", "下载", "download"]):
+        return any(marker in action_text for marker in ["导出", "export", "continue", "下载", "download"])
+
+    return False
+
+
+def _visible_text_shows_appended_placeholder(
+    observation: PageObservation | None,
+    targets: list[str],
+) -> bool:
+    if observation is None:
+        return False
+    text = " ".join(str(observation.text_excerpt or "").split()).lower()
+    if not text:
+        return False
+    placeholders = ["title text", "sample text", "your text"]
+    normalized_targets = [" ".join(target.split()).lower() for target in targets if target.strip()]
+    for placeholder in placeholders:
+        for target in normalized_targets:
+            if f"{placeholder}{target}" in text or f"{placeholder} {target}" in text:
+                return True
+    return False
+
+
+def _quoted_texts(text: str) -> list[str]:
+    values = re.findall(r"[“\"']([^“”\"']+)[”\"']", text)
+    return [value.strip() for value in values if value.strip()]
+
+
 def _append_unique(items: list, value: str) -> None:
     if value not in items:
         items.append(value)
+
+
+def _missing_required_evidence(item: dict[str, Any]) -> list[str]:
+    title = str(item.get("title") or "").lower()
+    evidence = " ".join(str(value or "") for value in item.get("evidence") or []).lower()
+    checks = [
+        (
+            "upload",
+            ["上传", "导入", "upload"],
+            ["upload", "uploaded", "上传", "导入"],
+        ),
+        (
+            "speed",
+            ["速度", "倍速", "speed", "1.5"],
+            ["speed", "速度", "倍速", "1.5"],
+        ),
+        (
+            "text/title",
+            ["标题", "文字", "text", "title", "短视频测试"],
+            ["标题", "文字", "text", "title", "短视频测试", "input"],
+        ),
+        (
+            "opacity",
+            ["透明", "不透明", "opacity"],
+            ["opacity", "透明", "不透明", "50"],
+        ),
+        (
+            "text color",
+            ["字体颜色", "文字颜色", "颜色", "color", "红色", "red"],
+            ["颜色", "color", "fill", "红", "red", "#f00", "#ff0000"],
+        ),
+        (
+            "export",
+            ["导出", "export", "continue", "下载", "download"],
+            ["导出", "export", "continue", "download", "下载"],
+        ),
+    ]
+    missing: list[str] = []
+    for name, title_markers, evidence_markers in checks:
+        if any(marker in title for marker in title_markers) and not any(
+            marker in evidence for marker in evidence_markers
+        ):
+            missing.append(name)
+    return missing
 
 
 def _fallback_restart_task_state(

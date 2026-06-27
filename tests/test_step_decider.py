@@ -61,6 +61,13 @@ def test_prompt_prefers_direct_input_for_visible_numeric_fields() -> None:
     assert "不要先 click 再 input" in _SYSTEM_PROMPT
 
 
+def test_prompt_requires_replacing_placeholder_title_text_and_color_change() -> None:
+    assert "完整替换" in _SYSTEM_PROMPT
+    assert "不要把新文字追加" in _SYSTEM_PROMPT
+    assert "Title text" in _SYSTEM_PROMPT
+    assert "颜色/Color/Fill/文字颜色" in _SYSTEM_PROMPT
+
+
 def test_prompt_allows_generation_to_request_debugger_after_reviewing_risk_signal() -> None:
     assert "risk_signal" in _SYSTEM_PROMPT
     assert "request_debugger=true" in _SYSTEM_PROMPT

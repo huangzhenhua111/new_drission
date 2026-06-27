@@ -74,7 +74,7 @@ class OpenAICompatibleClient:
         if response_format:
             payload["response_format"] = response_format
 
-        attempts = max(1, int(os.getenv("LLM_REQUEST_ATTEMPTS", "2")))
+        attempts = max(1, int(os.getenv("LLM_REQUEST_ATTEMPTS", "3")))
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
             req = urllib.request.Request(
@@ -91,6 +91,12 @@ class OpenAICompatibleClient:
                     return json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
+                if exc.code == 429 or 500 <= exc.code < 600:
+                    last_error = LLMError(f"LLM HTTP {exc.code}: {body}")
+                    if attempt >= attempts:
+                        break
+                    time.sleep(min(2 * attempt, 6))
+                    continue
                 raise LLMError(f"LLM HTTP {exc.code}: {body}") from exc
             except (urllib.error.URLError, TimeoutError, SocketTimeout, OSError) as exc:
                 last_error = exc

@@ -81,6 +81,28 @@ def test_state_update_gate_calls_periodic_checkpoint() -> None:
     assert gate["reason"] == "periodic_state_summary_checkpoint"
 
 
+def test_state_update_gate_skips_low_risk_local_panel_even_when_text_changes() -> None:
+    action = ActionCall(
+        type="click",
+        reason="open Speed panel",
+        expected_result="Speed settings panel opens",
+    )
+
+    gate = _state_update_gate(
+        step_number=5,
+        steps_since_model_state_update=0,
+        has_model_client=True,
+        decision=_decision(action, risk="low"),
+        action=action,
+        before=PageObservation(url="https://example.com/project", text_excerpt="Transform Adjust Audio"),
+        after=PageObservation(url="https://example.com/project", text_excerpt="Transform Adjust Audio Speed 0.5 0.75 1.25 1.5 2"),
+        result={"status": "clicked"},
+    )
+
+    assert gate["call_model"] is False
+    assert gate["reason"] == "low_risk_local_action_deterministic_update_is_enough"
+
+
 def test_state_update_gate_skips_plain_goto() -> None:
     action = ActionCall(type="goto", reason="open site", url="https://example.com")
 

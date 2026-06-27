@@ -95,6 +95,7 @@ class AgentLoop:
                         "reason": str(exc)[:800],
                     }
                 decision = _enforce_mandatory_debugger_signal(decision, self.task_state)
+                decision = _block_premature_finalizing_action(decision, self.task_state)
                 event = {
                     "step_id": f"s{step_number}",
                     "event": "action_decided",
@@ -785,6 +786,175 @@ def _enforce_mandatory_debugger_signal(
     )
 
 
+def _block_premature_finalizing_action(
+    decision: ActionDecision,
+    task_state: TaskState,
+) -> ActionDecision:
+    if not decision.actions:
+        return decision
+    action = decision.actions[0]
+    if not _looks_like_finalizing_or_external_action(action, decision):
+        return decision
+    first_unfinished = _first_unfinished_work_item(task_state)
+    if first_unfinished is None or _work_item_is_finalizing(first_unfinished):
+        return decision
+
+    instruction = (
+        "Do not execute Export/Continue/Download/Submit until this first unfinished "
+        "work item is completed and marked done."
+    )
+    blocked_action = _action_summary(action)
+    prior_block_count = _recent_premature_block_count(
+        task_state,
+        work_item_id=str(first_unfinished.get("id") or ""),
+    )
+    _rollback_later_finalizing_work_items(task_state, first_unfinished)
+    task_state.rolling_context["premature_finalizing_action_blocked"] = {
+        "blocked_action": blocked_action,
+        "reason": "premature_finalizing_action_blocked",
+        "first_unfinished_work_item": first_unfinished,
+        "instruction": instruction,
+        "block_count": prior_block_count + 1,
+    }
+    task_state.rolling_context["next_step"] = {
+        "work_item_id": first_unfinished.get("id"),
+        "intent": first_unfinished.get("title"),
+        "success_condition": first_unfinished.get("success_condition")
+        or f"完成事项：{first_unfinished.get('title')}",
+        "known_evidence": first_unfinished.get("evidence", []),
+        "guard_note": instruction,
+    }
+    task_state.known_failures.append(
+        {
+            "category": "premature_finalizing_action_blocked",
+            "blocked_action": blocked_action,
+            "work_item_id": first_unfinished.get("id"),
+            "message": instruction,
+            "block_count": prior_block_count + 1,
+        }
+    )
+    task_state.known_failures = task_state.known_failures[-12:]
+
+    if prior_block_count >= 2:
+        reason = (
+            "Premature finalizing action was blocked repeatedly for the same unfinished "
+            f"work item ({first_unfinished.get('title')}). Hand off to Debugger to close "
+            "the modal/rollback state and resume the prerequisite step."
+        )
+        return ActionDecision(
+            mode="single",
+            actions=[
+                ActionCall(
+                    type="wait",
+                    reason="Placeholder action; AgentLoop will hand off to Debugger before executing.",
+                    seconds=0,
+                    confidence=1.0,
+                    expected_result="Debugger receives repeated premature-finalizing context.",
+                )
+            ],
+            risk="high",
+            reason=reason,
+            expected_result="Debugger rolls back the premature finalizing state.",
+            commit_after=True,
+            stop_if_any_action_fails=True,
+            request_debugger=True,
+            debugger_reason=reason,
+        )
+
+    recovery_action = ActionCall(
+        type="hotkey",
+        value="ESC",
+        reason=(
+            "Guard blocked a premature finalizing action. Press Escape to close any "
+            "Export/Continue modal, then observe again and continue the unfinished item: "
+            f"{first_unfinished.get('title')}"
+        ),
+        confidence=1.0,
+        expected_result=(
+            "Any premature finalizing dialog is closed; the editor is visible again so "
+            "the unfinished prerequisite can continue."
+        ),
+    )
+    return ActionDecision(
+        mode="single",
+        actions=[recovery_action],
+        risk="medium",
+        reason=recovery_action.reason,
+        expected_result=recovery_action.expected_result,
+        commit_after=True,
+        stop_if_any_action_fails=True,
+    )
+
+
+def _recent_premature_block_count(task_state: TaskState, *, work_item_id: str) -> int:
+    count = 0
+    for failure in reversed(task_state.known_failures[-8:]):
+        if not isinstance(failure, dict):
+            continue
+        if failure.get("category") != "premature_finalizing_action_blocked":
+            continue
+        if str(failure.get("work_item_id") or "") != work_item_id:
+            continue
+        count += 1
+    return count
+
+
+def _rollback_later_finalizing_work_items(
+    task_state: TaskState,
+    first_unfinished: dict[str, Any],
+) -> None:
+    items = task_state.goal.get("work_items") if isinstance(task_state.goal, dict) else []
+    if not isinstance(items, list):
+        return
+    seen_unfinished = False
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item is first_unfinished or item.get("id") == first_unfinished.get("id"):
+            seen_unfinished = True
+            if item.get("status") != "done":
+                item["status"] = "in_progress"
+            continue
+        if not seen_unfinished:
+            continue
+        if not _work_item_is_finalizing(item):
+            continue
+        if item.get("status") == "done":
+            item["status"] = "pending"
+            item.setdefault("evidence", []).append(
+                "Rolled back by premature-finalizing guard because an earlier prerequisite is unfinished."
+            )
+
+
+def _first_unfinished_work_item(task_state: TaskState) -> dict[str, Any] | None:
+    goal = task_state.goal if isinstance(task_state.goal, dict) else {}
+    items = goal.get("work_items")
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if isinstance(item, dict) and item.get("status") != "done":
+            return item
+    return None
+
+
+def _work_item_is_finalizing(item: dict[str, Any]) -> bool:
+    text = str(item.get("title") or "").lower()
+    return any(
+        marker in text
+        for marker in [
+            "export",
+            "导出",
+            "continue",
+            "download",
+            "下载",
+            "submit",
+            "提交",
+            "save",
+            "保存",
+        ]
+    )
+
+
 def _state_update_gate(
     *,
     step_number: int,
@@ -858,6 +1028,18 @@ def _state_update_gate(
         return {
             "call_model": True,
             "reason": "batch_commit_requires_single_semantic_summary",
+        }
+
+    if (
+        decision.risk == "low"
+        and action.type in {"click", "double_click", "input", "hotkey", "scroll"}
+        and not _looks_like_finalizing_or_external_action(action, decision)
+        and not _url_context_changed(before.url, after.url)
+        and steps_since_model_state_update < 4
+    ):
+        return {
+            "call_model": False,
+            "reason": "low_risk_local_action_deterministic_update_is_enough",
         }
 
     if _page_text_changed_substantially(before.text_excerpt, after.text_excerpt):

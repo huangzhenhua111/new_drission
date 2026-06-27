@@ -24,3 +24,20 @@ def test_fallback_task_parser_creates_work_items() -> None:
     assert len(work_items) >= 3
     assert work_items[0]["status"] == "pending"
     assert any("上传" in item["title"] for item in work_items)
+
+
+def test_fallback_task_parser_splits_comma_separated_editing_steps() -> None:
+    state = TaskParser(None).parse(
+        request="打开 Clideo 视频编辑器，上传 sample.mp4，把视频速度调整为 1.5 倍，添加标题文字“短视频测试”，把标题字体颜色改成红色，把视频不透明度调低一点，最后点击 Export",
+        entry_url="https://clideo.com/editor/",
+        resources=["/tmp/sample.mp4"],
+    )
+
+    titles = [item["title"] for item in state.goal["work_items"]]
+
+    assert any("上传" in title for title in titles)
+    assert any("速度" in title for title in titles)
+    assert any("标题" in title or "文字" in title for title in titles)
+    assert any("颜色" in title or "红色" in title for title in titles)
+    assert any("透明" in title for title in titles)
+    assert any("Export" in title for title in titles)
